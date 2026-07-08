@@ -1,0 +1,159 @@
+services:
+  db:
+    image: postgres:16
+    container_name: sentinelml-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinelml}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sentinelml-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.3
+    container_name: sentinelml-mlflow
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MLFLOW_BACKEND_STORE_URI: ${MLFLOW_BACKEND_STORE_URI:-postgresql://postgres:postgres@db:5432/mlflow}
+      MLFLOW_ARTIFACT_ROOT: ${MLFLOW_ARTIFACT_ROOT:-/mlflow/artifacts}
+    command:
+      - /bin/sh
+      - -c
+      - >
+        pip install --no-cache-dir psycopg2-binary &&
+        mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri "$$MLFLOW_BACKEND_STORE_URI"
+        --default-artifact-root "$$MLFLOW_ARTIFACT_ROOT"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+      - ./mlruns:/mlruns
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()\""]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  airflow:
+    image: apache/airflow:2.9.3-python3.11
+    container_name: sentinelml-airflow
+    depends_on:
+      db:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: ${AIRFLOW__CORE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@db:5432/airflow}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    command:
+      - /bin/bash
+      - -c
+      - >
+        airflow db migrate &&
+        airflow users create
+        --username "$$AIRFLOW_ADMIN_USER"
+        --password "$$AIRFLOW_ADMIN_PASSWORD"
+        --firstname Sentinel
+        --lastname ML
+        --role Admin
+        --email admin@example.com || true &&
+        airflow scheduler &
+        exec airflow webserver
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+      - ./ml:/opt/airflow/ml
+      - ./data:/opt/airflow/data
+      - mlflow_artifacts:/mlflow/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  serving:
+    build:
+      context: .
+      dockerfile: serving/Dockerfile
+    container_name: sentinelml-serving
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/sentinelml
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MODEL_NAME: ${MODEL_NAME:-sentiment-model}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./serving:/app
+      - ./ml:/app/ml
+      - ./data:/app/data
+      - mlflow_artifacts:/mlflow/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health').read()\""]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  dashboard:
+    build:
+      context: ./dashboard
+    container_name: sentinelml-dashboard
+    depends_on:
+      serving:
+        condition: service_healthy
+    environment:
+      VITE_API_BASE_URL: /api/v1
+    ports:
+      - "3000:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
+  mlflow_artifacts:
