@@ -11,17 +11,20 @@ import numpy as np
 LOGGER = logging.getLogger(__name__)
 
 
-def set_seed(seed: int) -> None:
+def set_seed(seed: int, include_torch: bool = True) -> None:
     """Set all available random seeds for deterministic training runs."""
 
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
 
+    if not include_torch:
+        return
+
     try:
         import torch
-    except ImportError:
-        LOGGER.debug("PyTorch is not installed; skipping torch seed setup.")
+    except Exception as exc:
+        LOGGER.warning("PyTorch seed setup skipped: %s", exc)
         return
 
     torch.manual_seed(seed)

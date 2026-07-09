@@ -43,3 +43,16 @@ def test_validation_warns_on_imbalanced_data():
     report = validate_data(df)
 
     assert "Class balance is more skewed than 60/40." in report.warnings
+
+
+def test_validation_warns_on_duplicate_rows():
+    df = pd.DataFrame(
+        {
+            "text": ["good", "good", "bad", "bad"],
+            "label": [1, 1, 0, 0],
+        }
+    )
+
+    report = validate_data(df)
+
+    assert "Dataset contains 2 duplicated rows." in report.warnings
