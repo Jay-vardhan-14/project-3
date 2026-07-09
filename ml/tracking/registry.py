@@ -100,9 +100,16 @@ def _set_version_metadata(model_name: str, version: str, metrics: dict[str, Any]
 
 def _get_current_production_version(model_name: str) -> Any | None:
     from mlflow.tracking import MlflowClient
+    from mlflow.exceptions import MlflowException
 
     client = MlflowClient()
-    versions = client.get_latest_versions(model_name, stages=["Production"])
+    try:
+        versions = client.get_latest_versions(model_name, stages=["Production"])
+    except MlflowException as exc:
+        if "RESOURCE_DOES_NOT_EXIST" in str(exc):
+            LOGGER.info("No registered model exists yet for %s.", model_name)
+            return None
+        raise
     return versions[0] if versions else None
 
 

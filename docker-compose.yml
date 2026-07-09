@@ -43,6 +43,8 @@ services:
       - /bin/sh
       - -c
       - >
+        mkdir -p "$$MLFLOW_ARTIFACT_ROOT" &&
+        chmod -R 777 "$$MLFLOW_ARTIFACT_ROOT" &&
         pip install --no-cache-dir psycopg2-binary &&
         mlflow server
         --host 0.0.0.0
@@ -61,7 +63,10 @@ services:
       retries: 10
 
   airflow:
-    image: apache/airflow:2.9.3-python3.11
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: sentinelml-airflow:latest
     container_name: sentinelml-airflow
     depends_on:
       db:
@@ -71,17 +76,21 @@ services:
     environment:
       AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
       AIRFLOW__CORE__SQL_ALCHEMY_CONN: ${AIRFLOW__CORE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@db:5432/airflow}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@db:5432/airflow}
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
       AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
       AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+      PYTHONPATH: /opt/airflow
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SENTINELML_MAX_SAMPLES: ${SENTINELML_MAX_SAMPLES:-200}
+      SENTINELML_NUM_EPOCHS: ${SENTINELML_NUM_EPOCHS:-1}
+      SENTINELML_BATCH_SIZE: ${SENTINELML_BATCH_SIZE:-8}
+    entrypoint: /bin/bash
     command:
-      - /bin/bash
       - -c
       - >
-        pip install --no-cache-dir -r /opt/airflow/requirements-airflow.txt &&
         airflow db migrate &&
         airflow users create
         --username "$$AIRFLOW_ADMIN_USER"
@@ -98,7 +107,6 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./airflow/config:/opt/airflow/config
-      - ./airflow/requirements-airflow.txt:/opt/airflow/requirements-airflow.txt
       - ./ml:/opt/airflow/ml
       - ./data:/opt/airflow/data
       - mlflow_artifacts:/mlflow/artifacts

@@ -6,9 +6,9 @@ Phase 3 implements Airflow Orchestration from build prompt steps 15-18:
 
 - `sentiment_training_pipeline` DAG using Airflow TaskFlow API
 - `drift_detection` DAG using Airflow TaskFlow API
-- Drift detector module with Evidently integration and fallback detector
+- Drift detector module with Evidently integration and deterministic fallback
 - Alert creation/retrieval helpers
-- Airflow runtime requirements for ML/data/training/orchestration dependencies
+- Airflow runtime image and Compose wiring
 - Phase 3 tests for drift detection, alerts, and DAG helper behavior
 
 Phase 2 approved commit:
@@ -23,29 +23,23 @@ e6b0f6c24e74b8c9cbc1152c3bd4fc59355aeed2
 |---|---|---|
 | `airflow/dags/training_pipeline.py` | Main training DAG | `sentiment_training_pipeline()` DAG with TaskFlow tasks: `ingest_data`, `validate_data`, `preprocess_data`, `train_baseline`, `train_transformer`, `evaluate_and_compare`, `register_best_model`, `deploy_model` |
 | `airflow/dags/drift_detection.py` | Daily drift DAG | `drift_detection()` DAG with TaskFlow tasks: `collect_recent_predictions`, `load_reference_data`, `run_drift_detection`, `evaluate_drift`, `store_drift_report` |
-| `airflow/requirements-airflow.txt` | Runtime dependencies installed in Airflow container | Includes pandas, sklearn, MLflow 2.14.3, Evidently, psycopg2, Torch, Transformers, Accelerate, and related dependencies |
+| `airflow/Dockerfile` | Airflow runtime image | Builds `sentinelml-airflow:latest` from `apache/airflow:2.9.3-python3.11` and installs ML/orchestration dependencies at image build time |
+| `airflow/requirements-airflow.txt` | Airflow image dependencies | Pins Airflow-side datasets, MLflow, Evidently, sklearn, psycopg2, CPU Torch, Transformers, and Accelerate |
 | `ml/monitoring/drift_detector.py` | Drift detection | `DriftReport`, `detect_drift(...)`, `create_drift_summary(...)` |
 | `ml/monitoring/alerts.py` | Alert helper logic | `check_and_create_alert(...)`, `resolve_alert(...)`, `get_active_alerts(...)` |
-| `docker-compose.yml` | Airflow runtime wiring | Airflow installs `airflow/requirements-airflow.txt` on startup and mounts the requirements file |
-| `pyproject.toml` | Dependency extras | Adds `orchestration` extra with Airflow, Evidently, MLflow, psycopg2, requests |
+| `ml/tracking/registry.py` | Registry promotion logic | Handles first-time model registration when no Production model exists yet |
+| `docker-compose.yml` | Runtime wiring | Builds Airflow image, starts scheduler/webserver, sets `PYTHONPATH`, caps Airflow training defaults, and has MLflow repair artifact permissions |
+| `pyproject.toml` | Dependency extras | Adds orchestration dependencies |
 | `uv.lock` | Dependency lockfile | Updated for orchestration dependencies |
-| `tests/test_drift_detector.py` | Drift detector test | Forces fallback detector and verifies structured drift report output |
+| `tests/test_drift_detector.py` | Drift detector tests | Verifies structured fallback drift report output |
 | `tests/test_alerts.py` | Alert tests | Verifies warning and critical alert threshold behavior |
-| `tests/test_airflow_dag_helpers.py` | DAG helper test | Parses training DAG with fake Airflow decorators and tests `_xcom_safe` |
+| `tests/test_airflow_dag_helpers.py` | DAG helper tests | Parses training DAG with fake Airflow decorators and tests `_xcom_safe` |
 
 ## Training Pipeline DAG
 
-DAG id:
+DAG id: `sentiment_training_pipeline`
 
-```text
-sentiment_training_pipeline
-```
-
-Schedule:
-
-```text
-manual / schedule_interval=None
-```
+Schedule: manual only, `schedule_interval=None`
 
 Task order:
 
@@ -60,17 +54,6 @@ ingest_data
   -> deploy_model
 ```
 
-Behavior:
-
-- `ingest_data`: downloads the configured dataset and saves raw parquet.
-- `validate_data`: validates schema, nulls, empty text, labels, imbalance warnings, and duplicates.
-- `preprocess_data`: cleans text, creates stratified train/validation/test parquet splits.
-- `train_baseline`: calls the Phase 2 TF-IDF + Logistic Regression trainer and returns MLflow run metadata.
-- `train_transformer`: calls the Phase 2 DistilBERT trainer and returns MLflow run metadata.
-- `evaluate_and_compare`: compares baseline and transformer by `f1_macro`.
-- `register_best_model`: calls `compare_and_promote(...)` to register and promote only if the winner beats current Production.
-- `deploy_model`: attempts to call `POST /api/v1/model/reload` on the serving API; logs a warning and returns `reload_failed` if Phase 4 serving is not available yet.
-
 Retry policy:
 
 ```text
@@ -81,17 +64,9 @@ retry_exponential_backoff=True
 
 ## Drift Detection DAG
 
-DAG id:
+DAG id: `drift_detection`
 
-```text
-drift_detection
-```
-
-Schedule:
-
-```text
-@daily
-```
+Schedule: `@daily`
 
 Task order:
 
@@ -103,70 +78,7 @@ collect_recent_predictions
   -> store_drift_report
 ```
 
-Behavior:
-
-- `collect_recent_predictions`: queries recent prediction logs from PostgreSQL.
-- `load_reference_data`: loads the training split and converts labels into a reference sentiment distribution.
-- `run_drift_detection`: runs Evidently drift detection and saves an HTML report.
-- `evaluate_drift`: creates warning/critical/model degradation alerts when thresholds are exceeded.
-- `store_drift_report`: stores drift report metadata in PostgreSQL.
-
-The drift DAG creates the following tables if missing:
-
-- `predictions`
-- `drift_reports`
-- `alerts`
-
-## Drift Detector
-
-`ml/monitoring/drift_detector.py` first attempts Evidently:
-
-- `DataDriftPreset`
-- `ColumnDriftMetric` for `predicted_sentiment` when available
-- HTML report saved under `data/processed/drift_reports`
-
-If Evidently’s API fails or changes, the detector falls back to a deterministic distribution-distance implementation so the DAG still produces structured drift output.
-
-`DriftReport` fields:
-
-- `dataset_drift_detected`
-- `drift_score`
-- `features_drifted`
-- `total_features`
-- `prediction_drift_detected`
-- `reference_size`
-- `current_size`
-- `report_path`
-- `details`
-
-## Alerts
-
-`check_and_create_alert(...)` behavior:
-
-- `drift_score > 2 * drift_threshold`: `drift_critical`
-- `drift_score > drift_threshold`: `drift_warning`
-- `prediction_drift_detected`: `model_degradation`
-- Otherwise no alert is created
-
-Alert helpers can operate with a psycopg2-style DB session or return structured alert dictionaries without DB persistence.
-
-## DistilBERT First-Run Note
-
-The DAG uses the configured default model:
-
-```text
-distilbert-base-uncased
-```
-
-The first real DAG run will download the tokenizer/model weights unless they are already cached in the Airflow container. That first run can take noticeably longer.
-
-The Phase 2 `train_transformer` safeguards remain in force:
-
-- CPU uses `min(config.max_samples, 5000)`
-- CPU uses `min(config.num_epochs, 2)`
-- GPU runs the configured sample/epoch values
-
-These caps are intended to keep first CPU DAG runs bounded while still exercising the real transformer training path.
+The drift DAG creates missing `predictions`, `drift_reports`, and `alerts` tables.
 
 ## Verification
 
@@ -198,26 +110,108 @@ rg "print\(" ml tests airflow serving dashboard -g "*.py" -g "*.tsx"
 # no matches
 ```
 
-## Airflow Runtime Check
+## Real Airflow Runtime Check
 
-A direct local Python import of Airflow DAGs is not reliable on native Windows because Airflow imports POSIX-only modules such as `fcntl`. The test suite covers DAG helper behavior with fake Airflow decorators.
-
-Attempting to start the Airflow container after the code changes failed because Docker Desktop/Linux engine was no longer reachable:
+Airflow was started through Docker Compose with the verify override:
 
 ```text
-unable to get image 'ghcr.io/mlflow/mlflow:v2.14.3': failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
+docker-compose -f docker-compose.yml -f docker-compose.verify.yml up -d --force-recreate mlflow airflow
 ```
 
-Before Docker stopped, Phase 2 had already verified the live `db`, `redis`, and `mlflow` services with `docker-compose.verify.yml`. A full Airflow container startup/DAG list should be run once Docker is available again.
+Container status:
 
-Recommended command:
-
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.verify.yml up -d airflow
-docker-compose -f docker-compose.yml -f docker-compose.verify.yml logs airflow --tail=200
+```text
+NAME                 IMAGE                           COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+sentinelml-airflow   sentinelml-airflow:latest       "/bin/bash -c 'airfl..." airflow   21 minutes ago   Up 20 minutes (healthy)   0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
+sentinelml-db        postgres:16                     "docker-entrypoint.s..." db        25 hours ago     Up 2 hours (healthy)      0.0.0.0:15432->5432/tcp, [::]:15432->5432/tcp
+sentinelml-mlflow    ghcr.io/mlflow/mlflow:v2.14.3   "/bin/sh -c 'mkdir -..." mlflow    21 minutes ago   Up 20 minutes (healthy)   0.0.0.0:5000->5000/tcp, [::]:5000->5000/tcp
 ```
 
-## Known Phase Boundary
+Airflow DAG list:
+
+```text
+dag_id                      | fileloc                                | owners     | is_paused
+============================+========================================+============+==========
+drift_detection             | /opt/airflow/dags/drift_detection.py   | sentinelml | True
+sentiment_training_pipeline | /opt/airflow/dags/training_pipeline.py | sentinelml | False
+```
+
+Airflow import errors:
+
+```text
+No data found
+```
+
+Airflow startup logs confirmed scheduler and webserver:
+
+```text
+Starting the scheduler
+Listening at: http://0.0.0.0:8080
+```
+
+## Real DAG Run
+
+Triggered run:
+
+```text
+airflow dags trigger sentiment_training_pipeline --run-id phase3_airflow_verify_004
+```
+
+Final task states:
+
+```text
+dag_id                      | execution_date            | task_id              | state
+============================+===========================+======================+========
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | ingest_data          | success
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | validate_data        | success
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | preprocess_data      | success
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | train_baseline       | success
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | train_transformer    | success
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | evaluate_and_compare | success
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | register_best_model  | success
+sentiment_training_pipeline | 2026-07-09T20:10:48+00:00 | deploy_model         | success
+```
+
+Training results from the Airflow run:
+
+```text
+Baseline run_id: 3858df0a83c940b989076d19d0231ea7
+Transformer run_id: 25a6b9c258c84ca7b726a32b1b89a2ef
+Baseline f1_macro: 0.849624060150376
+Transformer f1_macro: 0.4949494949494949
+Winner: baseline-logreg
+```
+
+Registry promotion log:
+
+```text
+No registered model exists yet for sentiment-model.
+Successfully registered model 'sentiment-model'.
+Created version '1' of model 'sentiment-model'.
+Registered model sentiment-model version 1 from run 3858df0a83c940b989076d19d0231ea7.
+Promoted model sentiment-model version 1 to Production.
+Model promotion decision: {'promoted': True, 'reason': 'New model beat current Production macro F1.', 'old_f1': 0.0, 'new_f1': 0.849624060150376, 'version': '1', 'stage': 'Production'}
+```
+
+Deployment task result:
+
+```text
+Serving reload notification failed: HTTPConnectionPool(host='serving', port=8000): Max retries exceeded with url: /api/v1/model/reload
+Deployment notification result: {'status': 'reload_failed', ...}
+Marking task as SUCCESS. dag_id=sentiment_training_pipeline, task_id=deploy_model
+```
+
+This is expected in Phase 3 because Phase 4 serving is not running yet. The DAG intentionally treats reload notification failure as non-fatal.
+
+## Runtime Fixes From Live Airflow Verification
+
+Real Airflow exposed issues the mocked tests did not catch:
+
+- Airflow workers could not import `ml.*`; fixed with `PYTHONPATH=/opt/airflow`.
+- Airflow could not write MLflow artifacts into the shared artifact volume; fixed by having MLflow create and chmod its artifact root before server startup.
+- Registry promotion failed when no registered model existed yet; fixed `_get_current_production_version(...)` to return `None` for MLflow `RESOURCE_DOES_NOT_EXIST` and re-raise other MLflow exceptions.
+
+## Phase Boundary
 
 `deploy_model` calls the Phase 4 serving reload endpoint:
 
