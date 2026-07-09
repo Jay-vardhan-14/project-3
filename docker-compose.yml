@@ -81,6 +81,7 @@ services:
       - /bin/bash
       - -c
       - >
+        pip install --no-cache-dir -r /opt/airflow/requirements-airflow.txt &&
         airflow db migrate &&
         airflow users create
         --username "$$AIRFLOW_ADMIN_USER"
@@ -97,6 +98,7 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./airflow/config:/opt/airflow/config
+      - ./airflow/requirements-airflow.txt:/opt/airflow/requirements-airflow.txt
       - ./ml:/opt/airflow/ml
       - ./data:/opt/airflow/data
       - mlflow_artifacts:/mlflow/artifacts
