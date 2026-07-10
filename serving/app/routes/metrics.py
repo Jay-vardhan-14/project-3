@@ -85,6 +85,20 @@ async def distribution(
     return await metrics_service.sentiment_distribution(db, days, hours)
 
 
+@router.get("/metrics/distribution/confidence")
+async def confidence(
+    days: int | None = Query(default=None),
+    hours: int | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    return await metrics_service.confidence_histogram(db, days, hours)
+
+
+@router.get("/metrics/recent-predictions")
+async def recent_predictions(limit: int = Query(default=20, le=200), db: AsyncSession = Depends(get_db)):
+    return await metrics_service.recent_predictions(db, limit)
+
+
 @router.get("/metrics/alerts")
 async def alerts(db: AsyncSession = Depends(get_db)):
     return await metrics_service.alerts(db)

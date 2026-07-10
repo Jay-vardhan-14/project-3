@@ -100,6 +100,24 @@ async def sentiment_distribution(session: AsyncSession, days: int | None, hours:
     )
 
 
+async def recent_predictions(session: AsyncSession, limit: int = 20) -> list[dict[str, Any]]:
+    return await _rows(
+        session,
+        "SELECT created_at, predicted_sentiment, confidence, latency_ms, model_version "
+        f"FROM predictions ORDER BY created_at DESC LIMIT {int(limit)}",
+    )
+
+
+async def confidence_histogram(session: AsyncSession, days: int | None, hours: int | None) -> list[dict[str, Any]]:
+    # Buckets 0.5..0.9 in 0.1 steps (binary softmax max confidence is >= 0.5).
+    return await _rows(
+        session,
+        "SELECT floor(LEAST(confidence, 0.9999) * 10) / 10 AS bucket, COUNT(*) AS count "
+        f"FROM predictions WHERE {_window_clause(days, hours)} "
+        "GROUP BY bucket ORDER BY bucket",
+    )
+
+
 async def alerts(session: AsyncSession) -> list[dict[str, Any]]:
     return await _rows(
         session,
