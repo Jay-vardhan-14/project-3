@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import logging
 from typing import Any
 
@@ -98,7 +99,7 @@ def _insert_alert(db_session: Any, alert: dict[str, Any]) -> None:
             alert["alert_type"],
             alert["severity"],
             alert["message"],
-            alert["metadata"],
+            json.dumps(alert["metadata"]),  # JSONB column: psycopg2 can't adapt a raw dict
         ),
     )
 
