@@ -42,6 +42,24 @@ def _database_url() -> str:
     )
 
 
+def _on_dag_failure(context: Any) -> None:
+    """Mark the pipeline_runs row failed when the drift DAG run fails."""
+
+    try:
+        from ml.monitoring.pipeline_tracking import record_run_finish
+
+        dag_run = context["dag_run"]
+        record_run_finish(
+            _database_url(),
+            dag_run.dag_id,
+            dag_run.run_id,
+            "failed",
+            {"error": str(context.get("exception", ""))[:500]},
+        )
+    except Exception:
+        LOGGER.exception("Failed to record drift pipeline failure.")
+
+
 @dag(
     dag_id="drift_detection",
     description="Daily SentinelML drift detection and alerting pipeline.",
@@ -51,8 +69,20 @@ def _database_url() -> str:
     catchup=False,
     tags=["sentinelml", "drift", "monitoring"],
     doc_md=__doc__,
+    on_failure_callback=_on_dag_failure,
 )
 def drift_detection() -> None:
+    @task
+    def record_start() -> None:
+        """Insert a 'running' pipeline_runs row for this drift DAG run."""
+
+        from airflow.operators.python import get_current_context
+        from ml.monitoring.pipeline_tracking import record_run_start
+
+        context = get_current_context()
+        dag_run = context["dag_run"]
+        record_run_start(_database_url(), dag_run.dag_id, dag_run.run_id, dag_run.start_date)
+
     @task
     def collect_recent_predictions() -> dict[str, Any]:
         """Query recent predictions from DB as current dataset."""
@@ -201,13 +231,32 @@ def drift_detection() -> None:
             "report_path": drift_result["report_path"],
         }
         LOGGER.info("Stored drift report: %s", result)
+
+        # Terminal task reached => the drift run succeeded. Record the summary.
+        try:
+            from airflow.operators.python import get_current_context
+            from ml.monitoring.pipeline_tracking import record_run_finish
+
+            summary = {
+                "drift_score": drift_result.get("drift_score"),
+                "dataset_drift_detected": drift_result.get("dataset_drift_detected"),
+                "alert_created": bool(alert_result.get("created")),
+            }
+            context = get_current_context()
+            dag_run = context["dag_run"]
+            record_run_finish(_database_url(), dag_run.dag_id, dag_run.run_id, "success", summary)
+        except Exception:
+            LOGGER.exception("Failed to record drift pipeline success.")
+
         return result
 
+    start = record_start()
     current = collect_recent_predictions()
     reference = load_reference_data()
     drift = run_drift_detection(current, reference)
     alert = evaluate_drift(drift)
     store_drift_report(drift, alert)
+    start >> current
 
 
 def _connect_db() -> Any:

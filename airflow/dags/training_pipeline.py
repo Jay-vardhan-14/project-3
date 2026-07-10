@@ -38,6 +38,31 @@ def _config_from_context() -> Any:
     )
 
 
+def _database_url() -> str:
+    return os.getenv(
+        "SENTINELML_DATABASE_URL",
+        "postgresql://postgres:postgres@db:5432/sentinelml",
+    )
+
+
+def _on_dag_failure(context: Any) -> None:
+    """Mark the pipeline_runs row failed when the DAG run fails."""
+
+    try:
+        from ml.monitoring.pipeline_tracking import record_run_finish
+
+        dag_run = context["dag_run"]
+        record_run_finish(
+            _database_url(),
+            dag_run.dag_id,
+            dag_run.run_id,
+            "failed",
+            {"error": str(context.get("exception", ""))[:500]},
+        )
+    except Exception:
+        LOGGER.exception("Failed to record pipeline failure.")
+
+
 @dag(
     dag_id="sentiment_training_pipeline",
     description="End-to-end SentinelML sentiment model training and promotion pipeline.",
@@ -47,8 +72,20 @@ def _config_from_context() -> Any:
     catchup=False,
     tags=["sentinelml", "training", "mlflow"],
     doc_md=__doc__,
+    on_failure_callback=_on_dag_failure,
 )
 def sentiment_training_pipeline() -> None:
+    @task
+    def record_start() -> None:
+        """Insert a 'running' pipeline_runs row for this DAG run."""
+
+        from airflow.operators.python import get_current_context
+        from ml.monitoring.pipeline_tracking import record_run_start
+
+        context = get_current_context()
+        dag_run = context["dag_run"]
+        record_run_start(_database_url(), dag_run.dag_id, dag_run.run_id, dag_run.start_date)
+
     @task
     def ingest_data() -> dict[str, Any]:
         """Download dataset, save to data/raw/, and return summary metadata."""
@@ -208,9 +245,37 @@ def sentiment_training_pipeline() -> None:
             "registration": registration_result["registration"],
         }
         LOGGER.info("Deployment notification result: %s", result)
+
+        # Terminal task reached => the pipeline succeeded. Record the run summary.
+        try:
+            from airflow.operators.python import get_current_context
+            from ml.monitoring.pipeline_tracking import record_run_finish
+
+            candidates = registration_result.get("candidates", [])
+
+            def _candidate_f1(prefix: str) -> Any:
+                for candidate in candidates:
+                    if str(candidate.get("model_type", "")).startswith(prefix):
+                        return candidate.get("f1_macro")
+                return None
+
+            summary = {
+                "winner": registration_result.get("winner_model_type"),
+                "baseline_f1": _candidate_f1("baseline"),
+                "transformer_f1": _candidate_f1("distilbert"),
+                "promoted": registration_result.get("registration", {}).get("promoted"),
+            }
+            context = get_current_context()
+            dag_run = context["dag_run"]
+            record_run_finish(_database_url(), dag_run.dag_id, dag_run.run_id, "success", summary)
+        except Exception:
+            LOGGER.exception("Failed to record pipeline success.")
+
         return result
 
+    start = record_start()
     ingested = ingest_data()
+    start >> ingested
     validated = validate_data(ingested)
     preprocessed = preprocess_data(validated)
     baseline = train_baseline(preprocessed)
