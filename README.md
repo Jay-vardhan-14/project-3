@@ -95,8 +95,11 @@ host side in `docker-compose.yml` (e.g. change the dashboard's `"3000:8080"` to
 setting has a working default in `docker-compose.yml` (see `.env.example` to
 override any of them).
 
-Cold start takes ~70s to all-6-healthy plus ~60s for the seed step (~2.5 min
-total to a dashboard with data), on cached base images.
+With Docker images already built and base images pulled, a cold start (empty
+data volumes) takes ~70s to all-6-healthy plus ~60s for the seed step (~2.5 min
+total to a dashboard with data). A first-ever run is considerably longer: it
+must pull the base images and run the image builds (airflow/serving pip installs,
+dashboard `npm ci` + Vite build) before any of that.
 
 Then open:
 
