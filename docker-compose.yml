@@ -94,14 +94,14 @@ services:
       - >
         umask 000 &&
         airflow db migrate &&
-        airflow users create
+        (airflow users create
         --username "$$AIRFLOW_ADMIN_USER"
         --password "$$AIRFLOW_ADMIN_PASSWORD"
         --firstname Sentinel
         --lastname ML
         --role Admin
-        --email admin@example.com || true &&
-        airflow scheduler &
+        --email admin@example.com || true) &&
+        (airflow scheduler &) &&
         exec airflow webserver
     ports:
       - "8080:8080"

@@ -79,13 +79,24 @@ SentinelML is a production-style machine-learning pipeline for binary sentiment 
 # 1. Start the stack (db, redis, mlflow, airflow, serving, dashboard)
 docker-compose up --build -d
 
-# If host ports 5432/6379 are already in use, add the local override:
+# If the Postgres/Redis host ports 5432/6379 are already in use, add the override:
 docker-compose -f docker-compose.yml -f docker-compose.verify.yml up --build -d
 
 # 2. Seed demo data (trains a baseline, registers it Production, logs sample
 #    predictions + a drift history + an alert) so the dashboard has data:
 docker-compose exec airflow python /opt/airflow/ml/scripts/demo_setup.py
 ```
+
+The stack also needs the app-facing host ports **3000** (dashboard), **8000**
+(serving), **5000** (MLflow), and **8080** (Airflow) to be free — port 3000 in
+particular is a common default for other dev servers. If one is taken, remap its
+host side in `docker-compose.yml` (e.g. change the dashboard's `"3000:8080"` to
+`"3001:8080"` and open it on `3001` instead). No `.env` file is required; every
+setting has a working default in `docker-compose.yml` (see `.env.example` to
+override any of them).
+
+Cold start takes ~70s to all-6-healthy plus ~60s for the seed step (~2.5 min
+total to a dashboard with data), on cached base images.
 
 Then open:
 
