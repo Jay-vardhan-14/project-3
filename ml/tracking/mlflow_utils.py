@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 import tempfile
 from typing import Any, Literal
@@ -53,6 +54,12 @@ def log_training_run(
         return None
 
     try:
+        # Artifacts land on a volume shared with the non-root serving container,
+        # which must write mlflow's registered_model_meta into the model dir when
+        # loading from the registry. World-writable artifacts avoid a
+        # PermissionError there. This covers DAG runs and the exec'd demo script
+        # alike (a command-level umask does not apply to `docker exec`).
+        os.umask(0o000)
         if experiment_name:
             setup_mlflow(experiment_name)
         with mlflow.start_run(run_name=model_name) as run:

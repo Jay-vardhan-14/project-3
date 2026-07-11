@@ -45,6 +45,7 @@ services:
       - >
         mkdir -p "$$MLFLOW_ARTIFACT_ROOT" &&
         chmod -R 777 "$$MLFLOW_ARTIFACT_ROOT" &&
+        umask 000 &&
         pip install --no-cache-dir psycopg2-binary &&
         mlflow server
         --host 0.0.0.0
@@ -91,6 +92,7 @@ services:
     command:
       - -c
       - >
+        umask 000 &&
         airflow db migrate &&
         airflow users create
         --username "$$AIRFLOW_ADMIN_USER"
@@ -156,9 +158,9 @@ services:
     environment:
       VITE_API_BASE_URL: /api/v1
     ports:
-      - "3000:80"
+      - "3000:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1"]
       interval: 15s
       timeout: 5s
       retries: 10
