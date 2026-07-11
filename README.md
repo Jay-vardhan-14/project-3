@@ -37,6 +37,30 @@ SentinelML is a production-style machine-learning pipeline for binary sentiment 
                             └──────────────────────────┘
 ```
 
+## Dashboard
+
+The monochrome monitoring UI (React + Vite + Recharts), served on `http://localhost:3000` after the [Quick start](#quick-start) seed. All values below are real, from the seeded demo run.
+
+**Overview** — KPIs, prediction-volume trend, drift banner, recent alerts:
+
+![Overview](docs/images/overview.png)
+
+**Experiments** — MLflow runs with metrics:
+
+![Experiments](docs/images/experiments.png)
+
+**Drift** — Evidently drift-score trend vs. threshold, per-report table:
+
+![Drift](docs/images/drift.png)
+
+**Predictions** — sentiment split, latency percentiles, confidence histogram, recent rows:
+
+![Predictions](docs/images/predictions.png)
+
+**Pipeline** — Airflow DAG run history:
+
+![Pipeline](docs/images/pipeline.png)
+
 ## Tech stack
 
 | Layer | Technology | Purpose |

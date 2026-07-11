@@ -78,7 +78,7 @@ export function PredictionsPage() {
                 <XAxis dataKey="label" tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: CHART.grid }} />
                 <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={44} allowDecimals={false} />
                 <Tooltip contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid #e4e4e7', boxShadow: 'none' }} />
-                <Bar dataKey="count" fill={CHART.data} />
+                <Bar dataKey="count" fill={CHART.data} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           )}

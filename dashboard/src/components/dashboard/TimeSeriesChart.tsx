@@ -49,7 +49,7 @@ export function TimeSeriesChart<T extends object>({
           <XAxis dataKey={xKey} tick={AXIS_TICK} tickFormatter={xFormatter} tickLine={false} axisLine={{ stroke: CHART.grid }} />
           <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={44} allowDecimals={false} />
           <Tooltip contentStyle={tooltipStyle} labelFormatter={xFormatter} />
-          <Area type="monotone" dataKey={yKey} stroke={CHART.data} strokeWidth={1.5} fill={CHART.data} fillOpacity={0.1} />
+          <Area type="monotone" dataKey={yKey} stroke={CHART.data} strokeWidth={1.5} fill={CHART.data} fillOpacity={0.1} isAnimationActive={false} />
         </AreaChart>
       ) : (
         <LineChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
@@ -60,7 +60,7 @@ export function TimeSeriesChart<T extends object>({
           {threshold != null && (
             <ReferenceLine y={threshold} stroke={CHART.threshold} strokeDasharray="4 3" strokeWidth={1} />
           )}
-          <Line type="monotone" dataKey={yKey} stroke={CHART.data} strokeWidth={1.5} dot={{ r: 2, fill: CHART.data }} />
+          <Line type="monotone" dataKey={yKey} stroke={CHART.data} strokeWidth={1.5} dot={{ r: 2, fill: CHART.data }} isAnimationActive={false} />
         </LineChart>
       )}
     </ResponsiveContainer>
