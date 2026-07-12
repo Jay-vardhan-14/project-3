@@ -21,7 +21,10 @@ def _install_fake_airflow(monkeypatch):
 
     def dag(*args, **kwargs):
         def wrapper(fn):
-            return fn
+            # Real @dag returns a factory that builds the graph when called; the
+            # module invokes it at import time. We only need _xcom_safe, so the
+            # stub swallows that call instead of running the task-wiring body.
+            return lambda *a, **k: None
 
         return wrapper
 
